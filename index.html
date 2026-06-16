@@ -1,0 +1,893 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Pandu • Tasks, Reminders & Focus</title>
+    
+    <!-- Premium Font -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    
+    <!-- Tailwind Config -->
+    <script>
+      tailwind.config = {
+        theme: {
+          extend: {
+            fontFamily: { sans: ['Outfit', 'sans-serif'] },
+            colors: {
+              pandu: {
+                dark: '#050505',
+                border: 'rgba(255, 255, 255, 0.08)',
+              }
+            },
+            animation: {
+              'float': 'float 6s ease-in-out infinite',
+              'pulse-slow': 'pulse 4s cubic-bezier(0.4, 0, 0.6, 1) infinite',
+              'wave': 'waveform 1.2s ease-in-out infinite',
+            },
+            keyframes: {
+              float: {
+                '0%, 100%': { transform: 'translateY(0px)' },
+                '50%': { transform: 'translateY(-20px)' },
+              },
+              waveform: {
+                '0%, 100%': { height: '8px' },
+                '50%': { height: '24px' },
+              }
+            }
+          }
+        }
+      }
+    </script>
+
+    <!-- Babel & Import Maps -->
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <script type="importmap">
+    {
+        "imports": {
+            "react": "https://esm.sh/react@18.2.0",
+            "react-dom/client": "https://esm.sh/react-dom@18.2.0/client",
+            "lucide-react": "https://esm.sh/lucide-react@0.300.0?deps=react@18.2.0",
+            "firebase/app": "https://esm.sh/firebase@10.8.0/app",
+            "firebase/auth": "https://esm.sh/firebase@10.8.0/auth",
+            "firebase/firestore": "https://esm.sh/firebase@10.8.0/firestore"
+        }
+    }
+    </script>
+
+    <style>
+        body { background-color: #000; color: #e5e5e5; overflow-x: hidden; }
+        ::-webkit-scrollbar { width: 4px; }
+        ::-webkit-scrollbar-track { background: transparent; }
+        ::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.1); border-radius: 10px; }
+        ::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,0.3); }
+
+        .iridescent-border {
+            position: relative;
+            background: rgba(20, 20, 20, 0.4);
+            background-clip: padding-box;
+            border: 1px solid transparent;
+            border-radius: inherit;
+        }
+        .iridescent-border::before {
+            content: '';
+            position: absolute;
+            top: 0; right: 0; bottom: 0; left: 0;
+            z-index: -1;
+            margin: -1px;
+            border-radius: inherit;
+            background: linear-gradient(135deg, rgba(255,255,255,0.1), rgba(100,150,255,0.3), rgba(255,100,200,0.2), rgba(255,255,255,0.05));
+            opacity: 0.5;
+            transition: opacity 0.3s ease;
+        }
+
+        .input-glow:focus-within { box-shadow: 0 0 30px rgba(150, 200, 255, 0.1); border-color: rgba(150, 200, 255, 0.3); }
+        .tilt-card { transition: transform 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275); transform-style: preserve-3d; }
+        .tilt-card:hover { transform: translateY(-4px) scale(1.01) rotateX(2deg); }
+
+        /* Orbiting Nodes CSS */
+        .orbit-container { position: relative; width: 40px; height: 40px; display: flex; align-items: center; justify-content: center; }
+        .orbit-center { width: 12px; height: 12px; background: #fff; border-radius: 50%; box-shadow: 0 0 15px rgba(255,255,255,0.8); }
+        .orbit-ring { position: absolute; width: 100%; height: 100%; border-radius: 50%; border: 1px dashed rgba(255,255,255,0.2); animation: spin 8s linear infinite; }
+        .orbit-node { position: absolute; top: -3px; left: 50%; transform: translateX(-50%); width: 6px; height: 6px; background: #818cf8; border-radius: 50%; box-shadow: 0 0 10px #818cf8; }
+        .orbit-node-2 { top: auto; bottom: -3px; background: #34d399; box-shadow: 0 0 10px #34d399; }
+        @keyframes spin { 100% { transform: rotate(360deg); } }
+    </style>
+</head>
+<body>
+    <div id="root"></div>
+
+    <script type="text/babel" data-type="module">
+        import React, { useState, useEffect, useRef } from 'react';
+        import { createRoot } from 'react-dom/client';
+        import { initializeApp } from 'firebase/app';
+        import { getAuth, signInWithPopup, GoogleAuthProvider, onAuthStateChanged, signOut } from 'firebase/auth';
+        import { getFirestore, collection, doc, setDoc, onSnapshot, deleteDoc, updateDoc } from 'firebase/firestore';
+        import { 
+          CheckCircle2, Circle, Plus, Bell, Sparkles, Mail, HardDrive, ChevronRight, Menu, RefreshCw,
+          Activity, ShieldCheck, Send, Check, X, AlertTriangle, Loader2, LogOut, Sun
+        } from 'lucide-react';
+
+        // --- FIREBASE CONFIGURATION (REPLACE THESE KEYS LATER) ---
+        const firebaseConfig = {
+          apiKey: "demo-key", authDomain: "demo.firebaseapp.com", projectId: "demo-project", storageBucket: "demo.appspot.com"
+        };
+        const app = initializeApp(firebaseConfig);
+        const auth = getAuth(app);
+        const db = getFirestore(app);
+        const appId = 'pandu-todo-default';
+
+        // --- CACHE ENGINE ---
+        const DB_NAME = 'PanduAudioDB';
+        const STORE_NAME = 'audioBlobs';
+        const initDB = () => new Promise((resolve, reject) => {
+            const request = indexedDB.open(DB_NAME, 1);
+            request.onupgradeneeded = (e) => e.target.result.createObjectStore(STORE_NAME);
+            request.onsuccess = (e) => resolve(e.target.result);
+            request.onerror = (e) => reject(e.target.error);
+        });
+
+        const saveToCache = async (id, blob) => { try { const db = await initDB(); const tx = db.transaction(STORE_NAME, 'readwrite'); tx.objectStore(STORE_NAME).put(blob, id); } catch (e) {} };
+        const getFromCache = async (id) => { try { const db = await initDB(); return new Promise((resolve, reject) => { const tx = db.transaction(STORE_NAME, 'readonly'); const req = tx.objectStore(STORE_NAME).get(id); req.onsuccess = () => resolve(req.result); req.onerror = () => reject(req.error); }); } catch (e) { return null; } };
+
+        const playPopSound = () => { try { const audio = new Audio('https://assets.mixkit.co/active_storage/sfx/2568/2568-preview.mp3'); audio.volume = 0.4; audio.play(); } catch(e){} };
+
+        function useParallax() {
+            const [mousePos, setMousePos] = useState({ x: 0, y: 0 });
+            useEffect(() => {
+                const handleMouseMove = (e) => {
+                    const x = (e.clientX / window.innerWidth - 0.5) * 20; 
+                    const y = (e.clientY / window.innerHeight - 0.5) * 20;
+                    setMousePos({ x, y });
+                };
+                window.addEventListener('mousemove', handleMouseMove);
+                return () => window.removeEventListener('mousemove', handleMouseMove);
+            }, []);
+            return mousePos;
+        }
+
+        function AnimatedWaveform({ isPlaying, color = "bg-white" }) {
+            return (
+                <div className="flex items-center gap-[3px] h-6 px-2">
+                    {[0, 1, 2, 3, 4].map((i) => (
+                        <div key={i} className={`w-1 rounded-full ${color} transition-all duration-300 ${isPlaying ? 'animate-wave' : 'h-1.5 opacity-50'}`} style={{ animationDelay: `${i * 0.15}s` }}></div>
+                    ))}
+                </div>
+            );
+        }
+
+        function SyncOrbit() {
+            return (
+                <div className="orbit-container">
+                    <div className="orbit-center animate-pulse"></div>
+                    <div className="orbit-ring">
+                        <div className="orbit-node"></div>
+                        <div className="orbit-node-2"></div>
+                    </div>
+                </div>
+            );
+        }
+
+        // --- MAIN APP --- //
+
+        function App() {
+          const [user, setUser] = useState(null);
+          const [googleToken, setGoogleToken] = useState(null);
+          const [loading, setLoading] = useState(true);
+          
+          const [tasks, setTasks] = useState([]);
+          const [contextData, setContextData] = useState({ emails: [], files: [] });
+          const [view, setView] = useState('wizard'); 
+          const [toast, setToast] = useState(null);
+          const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+          
+          const [settings, setSettings] = useState({
+            wizardCompleted: false,
+            aiProvider: 'groq',
+            aiEnhanceDefault: true,
+            soundEnabled: true,
+            webhookUrl: ''
+          });
+
+          const { x: parallaxX, y: parallaxY } = useParallax();
+
+          useEffect(() => {
+            const unsubscribe = onAuthStateChanged(auth, (currentUser) => {
+              setUser(currentUser);
+              setLoading(false);
+              const storedToken = sessionStorage.getItem('pandu_google_token');
+              if (storedToken) setGoogleToken(storedToken);
+            });
+            return () => unsubscribe();
+          }, []);
+
+          const handleLogin = async () => {
+            const provider = new GoogleAuthProvider();
+            provider.addScope('https://www.googleapis.com/auth/drive.file');
+            try {
+              const result = await signInWithPopup(auth, provider);
+              const credential = GoogleAuthProvider.credentialFromResult(result);
+              setGoogleToken(credential.accessToken);
+              sessionStorage.setItem('pandu_google_token', credential.accessToken);
+            } catch (error) { showToast("Login failed.", "error"); }
+          };
+
+          const handleLogout = () => { sessionStorage.removeItem('pandu_google_token'); signOut(auth); };
+
+          useEffect(() => {
+            if (!user) return;
+            const settingsRef = doc(db, 'artifacts', appId, 'users', user.uid, 'config', 'userSettings');
+            const unsubSettings = onSnapshot(settingsRef, (docSnap) => {
+              if (docSnap.exists()) {
+                const fetchedSettings = docSnap.data();
+                setSettings(fetchedSettings);
+                if (fetchedSettings.wizardCompleted && view === 'wizard') setView('dashboard');
+                
+                // MORNING OPEN AUTO-SWEEP
+                if (fetchedSettings.webhookUrl) {
+                    const today = new Date().toDateString();
+                    const lastSweepDate = localStorage.getItem('pandu_last_morning_sweep');
+                    const hour = new Date().getHours();
+                    if (lastSweepDate !== today && hour >= 5 && hour < 12) {
+                        showToast("Good morning! Pandu is fetching context...", "sun");
+                        fetch(fetchedSettings.webhookUrl, { mode: 'no-cors' })
+                            .then(() => localStorage.setItem('pandu_last_morning_sweep', today))
+                            .catch(err => console.log(err));
+                    }
+                }
+              } else setView('wizard');
+            });
+
+            const tasksRef = collection(db, 'artifacts', appId, 'users', user.uid, 'tasks');
+            const unsubTasks = onSnapshot(tasksRef, (snapshot) => {
+              const fetchedTasks = [];
+              snapshot.forEach(doc => fetchedTasks.push({ id: doc.id, ...doc.data() }));
+              fetchedTasks.sort((a, b) => b.createdAt - a.createdAt);
+              setTasks(fetchedTasks);
+            });
+
+            const contextRef = doc(db, 'artifacts', appId, 'users', user.uid, 'context', 'latest');
+            const unsubContext = onSnapshot(contextRef, (docSnap) => {
+              if (docSnap.exists()) {
+                const data = docSnap.data();
+                setContextData({
+                  emails: data.emails ? JSON.parse(data.emails) : [],
+                  files: data.files ? JSON.parse(data.files) : []
+                });
+              }
+            });
+
+            return () => { unsubSettings(); unsubTasks(); unsubContext(); };
+          }, [user]);
+
+          const showToast = (message, type = 'info') => {
+            setToast({ message, type });
+            setTimeout(() => setToast(null), 4000);
+          };
+
+          const processAIInput = async (text) => {
+            await new Promise(r => setTimeout(r, 1200));
+            let isDrive = text.toLowerCase().includes('@drive');
+            return {
+              title: text.charAt(0).toUpperCase() + text.slice(1) + (isDrive ? " (Linked)" : ""),
+              type: text.toLowerCase().includes('remind') ? 'reminder' : 'task',
+              tags: isDrive ? ['Drive Sync'] : ['AI Deciphered'],
+              isAiProcessed: true,
+              hasDriveContext: isDrive,
+            };
+          };
+
+          const addTask = async (payload) => {
+            if (!user) return;
+            let finalTaskData = {
+              title: payload.text || "Audio Recording",
+              completed: false,
+              aiEnhanced: false,
+              tags: [],
+              createdAt: Date.now(),
+              inputType: payload.inputType || 'text',
+              driveFileId: payload.driveFileId || null
+            };
+
+            if (payload.useAi && payload.text) {
+              showToast("Pandu is analyzing...", "info");
+              try {
+                const aiResult = await processAIInput(payload.text);
+                finalTaskData = { ...finalTaskData, ...aiResult };
+              } catch (e) { showToast("AI failed. Saved raw.", "error"); }
+            }
+
+            const taskRef = doc(collection(db, 'artifacts', appId, 'users', user.uid, 'tasks'));
+            await setDoc(taskRef, finalTaskData);
+            showToast(payload.inputType === 'voice' ? "Voice encrypted to Drive!" : "Task integrated.");
+          };
+
+          const toggleTask = async (taskId, currentStatus) => {
+            if (!user) return;
+            if (!currentStatus && settings.soundEnabled) playPopSound(); 
+            await updateDoc(doc(db, 'artifacts', appId, 'users', user.uid, 'tasks', taskId), {
+              completed: !currentStatus,
+              completedAt: !currentStatus ? Date.now() : null
+            });
+          };
+
+          const deleteTask = async (taskId) => {
+            if (!user) return;
+            await deleteDoc(doc(db, 'artifacts', appId, 'users', user.uid, 'tasks', taskId));
+          };
+
+          if (loading) {
+            return (
+                <div className="min-h-screen bg-pandu-dark flex items-center justify-center text-white relative overflow-hidden">
+                    <div className="absolute w-[500px] h-[500px] bg-blue-500/10 rounded-full blur-[120px] animate-pulse-slow"></div>
+                    <img src="./logo_panda.jpg" alt="Pandu" className="w-24 h-24 object-contain drop-shadow-[0_0_30px_rgba(255,255,255,0.2)] mix-blend-screen animate-float" />
+                </div>
+            );
+          }
+
+          if (!user) {
+            return (
+              <div className="min-h-screen bg-pandu-dark flex items-center justify-center p-4 overflow-hidden relative font-sans">
+                <div className="absolute top-1/4 left-1/4 w-[600px] h-[600px] bg-indigo-500/10 rounded-full blur-[150px] transition-transform duration-100 ease-out" style={{ transform: `translate(${parallaxX * -1.5}px, ${parallaxY * -1.5}px)` }}></div>
+                <div className="absolute bottom-1/4 right-1/4 w-[500px] h-[500px] bg-fuchsia-500/10 rounded-full blur-[120px] transition-transform duration-100 ease-out" style={{ transform: `translate(${parallaxX * 2}px, ${parallaxY * 2}px)` }}></div>
+
+                <div className="w-full max-w-md z-10 animate-float" style={{ transform: `translate(${parallaxX * 0.5}px, ${parallaxY * 0.5}px)` }}>
+                  <div className="iridescent-border rounded-[2rem] p-10 text-center space-y-8 shadow-[0_0_50px_rgba(0,0,0,0.5)] backdrop-blur-xl bg-black/40">
+                    <div className="mx-auto flex flex-col items-center justify-center gap-4">
+                      <img src="./logo_panda.jpg" alt="Pandu Logo" className="w-32 h-32 object-contain drop-shadow-[0_0_40px_rgba(255,255,255,0.15)] mix-blend-screen" />
+                      <img src="./logo_text.jpg" alt="Pandu Text" className="w-56 object-contain filter invert mix-blend-screen opacity-90" />
+                    </div>
+                    <div>
+                      <p className="text-neutral-400 text-sm leading-relaxed font-light">Your private, zero-cost AI productivity engine. Seamlessly integrated with Google Workspace.</p>
+                    </div>
+                    <button onClick={handleLogin} className="w-full bg-white text-black font-semibold text-sm p-4 rounded-xl hover:scale-[1.02] active:scale-[0.98] transition-all shadow-[0_0_20px_rgba(255,255,255,0.1)] flex items-center justify-center gap-3">
+                      Authenticate with Google
+                    </button>
+                  </div>
+                </div>
+              </div>
+            );
+          }
+
+          return (
+            <div className="min-h-screen bg-pandu-dark text-neutral-200 font-sans selection:bg-indigo-500/30 overflow-hidden flex relative">
+              <div className="fixed pointer-events-none top-0 left-0 w-[50vw] h-[50vh] bg-blue-500/5 rounded-full blur-[150px] transition-transform duration-100" style={{ transform: `translate(${parallaxX * -1}px, ${parallaxY * -1}px)` }}></div>
+              <div className="fixed pointer-events-none bottom-0 right-0 w-[60vw] h-[60vh] bg-purple-500/5 rounded-full blur-[150px] transition-transform duration-100" style={{ transform: `translate(${parallaxX * 1}px, ${parallaxY * 1}px)` }}></div>
+
+              {toast && (
+                <div className="fixed top-6 right-6 z-50 animate-in fade-in slide-in-from-top-4 duration-300">
+                  <div className="iridescent-border backdrop-blur-md shadow-2xl rounded-xl p-4 flex items-center gap-3">
+                    {toast.type === 'success' ? <CheckCircle2 className="text-emerald-400 w-5 h-5" /> : 
+                     toast.type === 'error' ? <X className="text-red-400 w-5 h-5" /> : 
+                     toast.type === 'sun' ? <Sun className="text-amber-400 w-5 h-5" /> : 
+                     <Activity className="text-indigo-400 w-5 h-5" />}
+                    <p className="text-sm font-medium tracking-wide">{toast.message}</p>
+                  </div>
+                </div>
+              )}
+
+              {view === 'wizard' && <SetupWizard onComplete={(s) => { setDoc(doc(db, 'artifacts', appId, 'users', user.uid, 'config', 'userSettings'), {...settings, ...s, wizardCompleted: true}); setView('dashboard');}} user={user} />}
+
+              {view !== 'wizard' && (
+                <>
+                  {mobileMenuOpen && <div className="fixed inset-0 bg-black/80 z-40 lg:hidden backdrop-blur-sm" onClick={() => setMobileMenuOpen(false)} />}
+
+                  <aside className={`fixed lg:static top-0 left-0 h-full w-64 border-r border-pandu-border bg-black/40 backdrop-blur-2xl flex flex-col transition-transform duration-300 z-50 ${mobileMenuOpen ? 'translate-x-0' : '-translate-x-full lg:translate-x-0'}`}>
+                    <div className="h-24 flex items-center justify-between px-6 border-b border-pandu-border">
+                      <div className="flex items-center gap-3">
+                        <img src="./logo_panda.jpg" alt="Pandu Logo" className="w-10 h-10 object-contain shadow-[0_0_15px_rgba(255,255,255,0.1)] mix-blend-screen" />
+                        <img src="./logo_text.jpg" alt="Pandu Text" className="w-24 object-contain filter invert mix-blend-screen opacity-90" />
+                      </div>
+                      <button onClick={() => setMobileMenuOpen(false)} className="lg:hidden text-neutral-400"><X className="w-5 h-5" /></button>
+                    </div>
+                    
+                    <nav className="flex-1 p-4 space-y-2 overflow-y-auto">
+                      <NavItem iconSrc="./icon_dashboard.jpg" label="Dashboard" active={view === 'dashboard'} onClick={() => {setView('dashboard'); setMobileMenuOpen(false);}} />
+                      <NavItem iconSrc="./icon_tasks.jpg" label="Tasks & Voice" active={view === 'tasks'} onClick={() => {setView('tasks'); setMobileMenuOpen(false);}} />
+                      <NavItem iconSrc="./icon_history.jpg" label="History Archive" active={view === 'history'} onClick={() => {setView('history'); setMobileMenuOpen(false);}} />
+                      <NavItem iconSrc="./icon_chat.jpg" label="Pandu AI" active={view === 'chat'} onClick={() => {setView('chat'); setMobileMenuOpen(false);}} />
+                      <div className="pt-6 pb-2 px-3 text-[10px] font-bold text-neutral-600 uppercase tracking-widest">System Engine</div>
+                      <NavItem iconSrc="./icon_settings.jpg" label="Preferences" active={view === 'settings'} onClick={() => {setView('settings'); setMobileMenuOpen(false);}} />
+                    </nav>
+
+                    <div className="p-4 border-t border-pandu-border">
+                      <div className="flex items-center justify-between p-3 rounded-xl bg-white/5 border border-white/5 hover:bg-white/10 transition-colors group">
+                        <div className="flex items-center gap-3 overflow-hidden">
+                          <div className="w-8 h-8 rounded-full bg-gradient-to-br from-neutral-800 to-black flex items-center justify-center text-xs font-bold text-white shadow-inner">
+                            {user.displayName?.charAt(0) || "U"}
+                          </div>
+                          <div className="truncate">
+                            <p className="text-xs font-medium text-white truncate">{user.displayName || "User"}</p>
+                            <p className="text-[10px] text-emerald-400 truncate flex items-center gap-1"><span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span> Linked</p>
+                          </div>
+                        </div>
+                        <button onClick={handleLogout} className="p-2 text-neutral-500 group-hover:text-red-400 transition-colors">
+                          <LogOut className="w-4 h-4" />
+                        </button>
+                      </div>
+                    </div>
+                  </aside>
+
+                  <main className="flex-1 flex flex-col relative h-screen overflow-y-auto z-10">
+                    <header className="h-24 border-b border-pandu-border flex items-center justify-between px-4 lg:px-10 sticky top-0 bg-black/20 backdrop-blur-xl z-30">
+                      <div className="flex items-center gap-4 text-neutral-400">
+                        <button onClick={() => setMobileMenuOpen(true)} className="lg:hidden p-1 hover:text-white"><Menu className="w-6 h-6" /></button>
+                        <span className="capitalize font-semibold text-white hidden sm:block tracking-wide">{view}</span>
+                        <ChevronRight className="w-4 h-4 text-neutral-600 hidden sm:block" />
+                        <span className="text-sm tracking-wide">Secure Enclave</span>
+                      </div>
+                      <div className="flex items-center gap-5">
+                        {googleToken ? (
+                           <span className="hidden sm:flex items-center gap-2 text-xs font-bold uppercase tracking-wider bg-emerald-500/10 text-emerald-400 px-4 py-2 rounded-full border border-emerald-500/20 shadow-[0_0_15px_rgba(16,185,129,0.1)]">
+                             <HardDrive className="w-3.5 h-3.5" /> Drive Active
+                           </span>
+                        ) : (
+                           <button onClick={handleLogin} className="hidden sm:flex items-center gap-2 text-xs font-bold uppercase tracking-wider bg-red-500/10 text-red-400 hover:bg-red-500/20 transition-colors px-4 py-2 rounded-full border border-red-500/20">
+                             <AlertTriangle className="w-3.5 h-3.5" /> Link Drive
+                           </button>
+                        )}
+                        <button className="p-2 text-neutral-400 hover:text-white transition-colors relative">
+                          <Bell className="w-5 h-5" />
+                        </button>
+                      </div>
+                    </header>
+
+                    <div className="p-4 lg:p-10 max-w-5xl mx-auto w-full pb-32">
+                      {view === 'tasks' && <TasksView tasks={tasks} onAdd={addTask} onToggle={toggleTask} onDelete={deleteTask} settings={settings} googleToken={googleToken} />}
+                      {view === 'history' && <HistoryView tasks={tasks} onToggle={toggleTask} onDelete={deleteTask} googleToken={googleToken} />}
+                      {view === 'dashboard' && <DashboardView tasks={tasks} contextData={contextData} settings={settings} showToast={showToast} />}
+                      {view === 'chat' && <ChatView />}
+                      {view === 'settings' && <SettingsView settings={settings} onUpdate={(newSet) => setDoc(doc(db, 'artifacts', appId, 'users', user.uid, 'config', 'userSettings'), newSet)} />}
+                    </div>
+                  </main>
+                </>
+              )}
+            </div>
+          );
+        }
+
+        function NavItem({ iconSrc, label, active, onClick }) {
+          return (
+            <button 
+              onClick={onClick}
+              className={`w-full flex items-center gap-3 p-3.5 rounded-xl transition-all duration-300 group relative overflow-hidden ${
+                active ? 'bg-white/10 text-white shadow-lg' : 'text-neutral-400 hover:bg-white/5 hover:text-neutral-200'
+              }`}
+            >
+              {active && <div className="absolute inset-0 bg-gradient-to-r from-white/5 to-transparent opacity-50"></div>}
+              <img src={iconSrc} alt={label} className={`w-5 h-5 relative z-10 transition-all mix-blend-screen ${active ? 'opacity-100 drop-shadow-[0_0_8px_rgba(255,255,255,0.8)]' : 'opacity-50 group-hover:opacity-80'}`} />
+              <span className="font-medium text-sm tracking-wide relative z-10">{label}</span>
+            </button>
+          );
+        }
+
+        // --- TASKS VIEW ---
+        function TasksView({ tasks, onAdd, onToggle, onDelete, settings, googleToken }) {
+          const [inputText, setInputText] = useState('');
+          const [aiEnhance, setAiEnhance] = useState(settings.aiEnhanceDefault);
+          const [isRecording, setIsRecording] = useState(false);
+          const [recordingTime, setRecordingTime] = useState(0);
+          const mediaRecorderRef = useRef(null);
+          const audioChunksRef = useRef([]);
+          const timerRef = useRef(null);
+
+          const handleSubmit = (e) => { e.preventDefault(); if (!inputText.trim()) return; onAdd({ text: inputText, useAi: aiEnhance, inputType: 'text' }); setInputText(''); };
+          
+          const startRecording = async () => { 
+             try { const stream = await navigator.mediaDevices.getUserMedia({ audio: true }); const mediaRecorder = new MediaRecorder(stream); mediaRecorderRef.current = mediaRecorder; audioChunksRef.current = []; mediaRecorder.ondataavailable = (e) => { if (e.data.size > 0) audioChunksRef.current.push(e.data); }; mediaRecorder.onstop = async () => { await handleAudioUpload(new Blob(audioChunksRef.current, { type: 'audio/webm' })); }; mediaRecorder.start(); setIsRecording(true); setRecordingTime(0); timerRef.current = setInterval(() => setRecordingTime(p => p + 1), 1000); } catch (err) { alert("Mic required."); }
+          };
+          const stopRecording = () => { 
+             if (mediaRecorderRef.current && isRecording) { mediaRecorderRef.current.stop(); mediaRecorderRef.current.stream.getTracks().forEach(track => track.stop()); setIsRecording(false); clearInterval(timerRef.current); }
+          };
+          const handleAudioUpload = async (blob) => { 
+             if (!googleToken) return alert("Session expired. Re-link Drive."); try { const uploadRes = await fetch('https://www.googleapis.com/upload/drive/v3/files?uploadType=media', { method: 'POST', headers: { 'Authorization': `Bearer ${googleToken}`, 'Content-Type': 'audio/webm' }, body: blob }); const fileData = await uploadRes.json(); await fetch(`https://www.googleapis.com/drive/v3/files/${fileData.id}`, { method: 'PATCH', headers: { 'Authorization': `Bearer ${googleToken}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ name: `Pandu_Audio_${new Date().getTime()}.webm` }) }); await saveToCache(fileData.id, blob); onAdd({ text: inputText || `Voice Memo`, useAi: aiEnhance, inputType: 'voice', driveFileId: fileData.id }); setInputText(''); } catch (err) { alert("Upload failed."); }
+          };
+          
+          const formatTime = (seconds) => `${Math.floor(seconds / 60)}:${(seconds % 60).toString().padStart(2, '0')}`;
+          
+          // Only show pending tasks in the workspace to keep it Zen.
+          const pendingTasks = tasks.filter(t => !t.completed);
+
+          return (
+            <div className="space-y-10 animate-in fade-in duration-700">
+              <div className={`iridescent-border input-glow transition-all duration-500 rounded-3xl p-5 backdrop-blur-2xl ${isRecording ? 'shadow-[0_0_40px_rgba(239,68,68,0.2)] border-red-500/50' : ''}`}>
+                <form onSubmit={handleSubmit} className="flex flex-col gap-4">
+                  {isRecording ? (
+                    <div className="h-[70px] flex items-center justify-between px-6 bg-red-500/10 rounded-2xl border border-red-500/20">
+                       <div className="flex items-center gap-4">
+                         <div className="w-4 h-4 rounded-full bg-red-500 animate-pulse shadow-[0_0_15px_rgba(239,68,68,0.8)]"></div>
+                         <AnimatedWaveform isPlaying={true} color="bg-red-400" />
+                         <span className="text-red-400 font-mono text-2xl tracking-widest ml-4">{formatTime(recordingTime)}</span>
+                       </div>
+                       <button type="button" onClick={stopRecording} className="bg-red-500 text-white px-6 py-2.5 rounded-xl text-sm font-bold tracking-wide hover:bg-red-600 transition-colors shadow-[0_0_20px_rgba(239,68,68,0.4)]">Stop & Encrypt</button>
+                    </div>
+                  ) : (
+                    <textarea rows="2" value={inputText} onChange={(e) => setInputText(e.target.value)} placeholder="Brain dump here. Mention @Drive files..." className="bg-transparent border-none outline-none text-lg lg:text-xl text-white placeholder:text-neutral-600 w-full px-2 resize-none font-light leading-relaxed" />
+                  )}
+
+                  {!isRecording && (
+                    <div className="flex flex-col sm:flex-row sm:items-center justify-between border-t border-pandu-border pt-4 mt-1 gap-4 sm:gap-0">
+                      <div className="flex gap-3">
+                        <button type="button" onClick={startRecording} className="px-4 py-2.5 rounded-xl text-neutral-400 hover:bg-white/10 hover:text-white transition-all flex items-center gap-2 group border border-transparent hover:border-white/10">
+                          <img src="./icon_mic.jpg" alt="Mic" className="w-5 h-5 mix-blend-screen opacity-70 group-hover:opacity-100 transition-opacity" /> 
+                          <span className="text-xs font-bold tracking-wider uppercase">Voice</span>
+                        </button>
+                      </div>
+                      <div className="flex items-center justify-between sm:justify-end gap-6 w-full sm:w-auto px-2 sm:px-0">
+                        <label className="flex items-center gap-2 text-sm text-neutral-400 cursor-pointer hover:text-white select-none group transition-colors font-medium">
+                          <div className={`w-5 h-5 rounded border flex items-center justify-center transition-all duration-300 ${aiEnhance ? 'bg-white border-white text-black shadow-[0_0_10px_rgba(255,255,255,0.8)]' : 'border-neutral-600 group-hover:border-neutral-400'}`}>
+                            {aiEnhance && <Check className="w-3.5 h-3.5" />}
+                          </div>
+                          <Sparkles className={`w-4 h-4 transition-all duration-500 ${aiEnhance ? 'text-indigo-400 animate-pulse' : 'text-neutral-500'}`} /> Pandu AI
+                        </label>
+                        <button disabled={!inputText.trim()} type="submit" className="bg-white text-black px-8 py-3 rounded-xl font-bold tracking-wide flex items-center gap-2 hover:bg-neutral-200 disabled:opacity-50 transition-all shadow-[0_0_20px_rgba(255,255,255,0.2)] active:scale-95">
+                          Add <Plus className="w-5 h-5" />
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                </form>
+              </div>
+
+              <div className="space-y-6">
+                {pendingTasks.length === 0 ? (
+                  <div className="flex flex-col items-center justify-center py-20 text-center animate-in zoom-in-95 duration-700">
+                    <img src="./illust_empty_tasks.jpg" alt="Inbox Zero" className="w-64 h-64 object-contain mix-blend-screen drop-shadow-[0_0_30px_rgba(255,255,255,0.1)] mb-4" />
+                    <h3 className="text-2xl font-light text-white mb-2">The Zen Workspace</h3>
+                    <p className="text-neutral-500 max-w-sm text-sm font-light">Your cognitive load is zero. Add a thought or review history.</p>
+                  </div>
+                ) : (
+                  <div className="grid grid-cols-1 gap-3">
+                    {pendingTasks.map(task => <TaskCard key={task.id} task={task} onToggle={onToggle} onDelete={onDelete} googleToken={googleToken} />)}
+                  </div>
+                )}
+              </div>
+            </div>
+          );
+        }
+
+        // --- HISTORY VIEW ---
+        function HistoryView({ tasks, onToggle, onDelete, googleToken }) {
+          const completedTasks = tasks.filter(t => t.completed).sort((a, b) => b.completedAt - a.completedAt);
+
+          return (
+            <div className="space-y-8 animate-in fade-in duration-700">
+               <div>
+                 <h2 className="text-3xl font-light text-white mb-3">Archive</h2>
+                 <p className="text-neutral-500 text-sm tracking-wide">Your completed tasks and resolved context.</p>
+               </div>
+               
+               {completedTasks.length === 0 ? (
+                 <div className="flex flex-col items-center justify-center py-20 text-center animate-in zoom-in-95 duration-700">
+                    <img src="./illust_empty_tasks.jpg" alt="No History" className="w-64 h-64 object-contain mix-blend-screen drop-shadow-[0_0_30px_rgba(255,255,255,0.1)] mb-4" />
+                    <h3 className="text-2xl font-light text-white mb-2">A Clean Slate</h3>
+                    <p className="text-neutral-500 max-w-sm text-sm font-light">You haven't completed any tasks yet. Get to work!</p>
+                 </div>
+               ) : (
+                 <div className="grid grid-cols-1 gap-3 opacity-60 hover:opacity-100 transition-opacity duration-500">
+                   {completedTasks.map(task => <TaskCard key={task.id} task={task} onToggle={onToggle} onDelete={onDelete} googleToken={googleToken} />)}
+                 </div>
+               )}
+            </div>
+          );
+        }
+
+        function TaskCard({ task, onToggle, onDelete, googleToken }) {
+          const [audioUrl, setAudioUrl] = useState(null);
+          const [audioLoading, setAudioLoading] = useState(task.inputType === 'voice' && task.driveFileId);
+          const [isPlaying, setIsPlaying] = useState(false);
+
+          useEffect(() => {
+            if (task.inputType === 'voice' && task.driveFileId) {
+              const loadAudio = async () => {
+                const cachedBlob = await getFromCache(task.driveFileId);
+                if (cachedBlob) { setAudioUrl(URL.createObjectURL(cachedBlob)); setAudioLoading(false); return; }
+                if (!googleToken) { setAudioLoading(false); return; }
+                try { const res = await fetch(`https://www.googleapis.com/drive/v3/files/${task.driveFileId}?alt=media`, { headers: { 'Authorization': `Bearer ${googleToken}` } }); if (!res.ok) throw new Error(); const blob = await res.blob(); await saveToCache(task.driveFileId, blob); setAudioUrl(URL.createObjectURL(blob)); } catch (err) { } finally { setAudioLoading(false); }
+              };
+              loadAudio();
+            }
+          }, [task, googleToken]);
+
+          return (
+            <div className={`tilt-card group flex flex-col sm:flex-row sm:items-start gap-4 p-5 rounded-2xl border border-white/5 bg-white/[0.02] hover:bg-white/[0.05] transition-colors relative ${task.completed ? 'opacity-70' : ''}`}>
+              <div className="flex items-start gap-4 w-full">
+                <button onClick={() => onToggle(task.id, task.completed)} className="mt-1 flex-shrink-0 text-neutral-600 hover:text-white transition-all transform hover:scale-110 active:scale-95">
+                  {task.completed ? <CheckCircle2 className="w-7 h-7 text-white drop-shadow-[0_0_15px_rgba(255,255,255,0.8)]" /> : <Circle className="w-7 h-7" />}
+                </button>
+                <div className="flex-1 min-w-0 pr-8 sm:pr-0">
+                  <p className={`text-lg transition-all font-light ${task.completed ? 'text-neutral-500 line-through' : 'text-neutral-200'}`}>{task.title}</p>
+                  {task.inputType === 'voice' && (
+                    <div className="mt-4 mb-2 flex items-center gap-4">
+                      {audioLoading ? ( <div className="flex items-center gap-3 p-3 rounded-xl border border-white/10 bg-black/50 w-fit"><Loader2 className="w-4 h-4 animate-spin text-neutral-400" /><span className="text-xs text-neutral-400">Decrypting from Drive...</span></div> ) : audioUrl ? (
+                        <div className="flex items-center gap-4 p-2 rounded-xl border border-white/10 bg-black/50 inline-block shadow-inner pr-6">
+                          <audio onPlay={() => setIsPlaying(true)} onPause={() => setIsPlaying(false)} controls src={audioUrl} className="h-10 w-64 opacity-70 hover:opacity-100 transition-opacity invert grayscale" />
+                          <AnimatedWaveform isPlaying={isPlaying} />
+                        </div>
+                      ) : ( <div className="text-xs text-red-400">Audio unavailable</div> )}
+                    </div>
+                  )}
+                  <div className="flex flex-wrap items-center gap-2 mt-4">
+                    {task.inputType === 'voice' && <span className="flex items-center gap-1.5 text-[9px] uppercase tracking-widest font-bold bg-neutral-800 text-neutral-300 px-2.5 py-1.5 rounded-md border border-neutral-700"><img src="./icon_mic.jpg" className="w-3 h-3 mix-blend-screen" alt="mic"/> Encrypted Local</span>}
+                    {task.isAiProcessed && <span className="flex items-center gap-1.5 text-[9px] uppercase tracking-widest font-bold bg-indigo-500/20 text-indigo-300 px-2.5 py-1.5 rounded-md border border-indigo-500/30"><Sparkles className="w-3 h-3 animate-pulse" /> Pandu Deciphered</span>}
+                    {task.tags?.map((tag, i) => <span key={i} className="text-[9px] uppercase tracking-widest font-bold bg-white/5 text-neutral-400 px-2.5 py-1.5 rounded-md border border-white/10">{tag}</span>)}
+                  </div>
+                </div>
+              </div>
+              <button onClick={() => onDelete(task.id)} className="absolute top-4 right-4 sm:static sm:opacity-0 sm:group-hover:opacity-100 p-2 text-neutral-600 hover:text-red-400 transition-all rounded-lg hover:bg-red-500/10"><X className="w-5 h-5" /></button>
+            </div>
+          );
+        }
+
+        // --- DASHBOARD VIEW ---
+        function DashboardView({ tasks, contextData, settings, showToast }) {
+          const [isSweeping, setIsSweeping] = useState(false);
+          const completed = tasks.filter(t => t.completed).length;
+          const total = tasks.length;
+          const progress = total === 0 ? 0 : Math.round((completed / total) * 100);
+
+          const triggerManualSweep = async () => {
+             if (!settings.webhookUrl) {
+                showToast("Add your Webhook URL in Preferences to force sync.", "error");
+                return;
+             }
+             setIsSweeping(true);
+             try {
+                await fetch(settings.webhookUrl, { mode: 'no-cors' });
+                showToast("Force sync initiated. Nodes will update shortly.", "success");
+             } catch (e) { showToast("Ping failed. Check your Webhook URL.", "error"); }
+             setTimeout(() => setIsSweeping(false), 3000);
+          };
+
+          return (
+            <div className="space-y-8 animate-in fade-in duration-700">
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                
+                <div className="iridescent-border p-8 rounded-3xl relative overflow-hidden bg-black/40 backdrop-blur-xl">
+                  <div className="absolute -top-20 -right-20 w-48 h-48 bg-white/10 rounded-full blur-[50px] animate-pulse-slow"></div>
+                  <h3 className="text-neutral-400 font-medium mb-2 tracking-wide uppercase text-xs">Completion Rate</h3>
+                  <p className="text-6xl font-light text-white mb-8 tracking-tight">{progress}%</p>
+                  <div className="w-full bg-neutral-900 rounded-full h-1 overflow-hidden">
+                    <div className="bg-gradient-to-r from-neutral-600 to-white h-full transition-all duration-1000 ease-out shadow-[0_0_10px_rgba(255,255,255,0.8)]" style={{ width: `${progress}%` }}></div>
+                  </div>
+                  <p className="text-xs text-neutral-500 mt-5 font-medium tracking-wide">{completed} of {total} missions accomplished</p>
+                </div>
+
+                <div className="p-8 rounded-3xl border border-white/5 bg-black/20 backdrop-blur-xl md:col-span-2 lg:col-span-2">
+                  <div className="flex items-center justify-between mb-8">
+                      <div className="flex items-center gap-4">
+                          <SyncOrbit />
+                          <div>
+                              <p className="text-sm font-bold text-white tracking-wide">Background Nodes</p>
+                              <p className="text-xs text-neutral-500 tracking-wide mt-1">Engine Active</p>
+                          </div>
+                      </div>
+                      
+                      <button onClick={triggerManualSweep} disabled={isSweeping} className="flex items-center gap-2 p-2 sm:px-4 sm:py-2 bg-white/5 hover:bg-white/10 rounded-xl transition-colors border border-white/10 group" title="Force Sync">
+                        <RefreshCw className={`w-4 h-4 text-neutral-400 group-hover:text-white transition-all ${isSweeping ? 'animate-spin text-indigo-400' : ''}`} />
+                        <span className="text-xs font-bold text-neutral-400 group-hover:text-white uppercase tracking-widest hidden sm:block">Force Sync</span>
+                      </button>
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                     <div className="flex items-center justify-between p-4 rounded-2xl bg-white/5 border border-white/5">
+                        <div className="flex items-center gap-4">
+                          <Mail className="w-5 h-5 text-neutral-400" />
+                          <span className="text-sm font-medium tracking-wide">Gmail Threads</span>
+                        </div>
+                        <span className="text-xs font-bold bg-white/10 px-2 py-1 rounded text-neutral-300">{contextData.emails?.length || 0}</span>
+                     </div>
+                     <div className="flex items-center justify-between p-4 rounded-2xl bg-white/5 border border-white/5">
+                        <div className="flex items-center gap-4">
+                          <HardDrive className="w-5 h-5 text-neutral-400" />
+                          <span className="text-sm font-medium tracking-wide">Drive Documents</span>
+                        </div>
+                        <span className="text-xs font-bold bg-white/10 px-2 py-1 rounded text-neutral-300">{contextData.files?.length || 0}</span>
+                     </div>
+                  </div>
+                </div>
+              </div>
+              
+              <div className="pt-8">
+                <h3 className="text-xl font-light text-white mb-6">Contextual Stream</h3>
+                {contextData.files.length === 0 && contextData.emails.length === 0 ? (
+                  <div className="border border-white/5 bg-black/20 rounded-[2rem] p-16 flex flex-col items-center justify-center text-center">
+                    <img src="./illust_listening.jpg" className="w-40 h-40 object-contain mix-blend-screen drop-shadow-[0_0_20px_rgba(255,255,255,0.1)] mb-6" alt="Pandu Listening" />
+                    <p className="text-white font-light text-xl">Listening for Background Sync</p>
+                    <p className="text-sm text-neutral-500 mt-3 max-w-md font-light leading-relaxed">Once your Apps Script runs, or you hit Force Sync, important emails and drive files will appear here.</p>
+                  </div>
+                ) : (
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    {contextData.emails.map((mail, i) => (
+                      <div key={i} className="tilt-card p-5 rounded-2xl border border-white/5 bg-white/5 flex items-start gap-4">
+                        <Mail className="w-6 h-6 text-neutral-400 flex-shrink-0" />
+                        <div className="overflow-hidden">
+                          <p className="text-base font-light text-white truncate">{mail.subject}</p>
+                          <p className="text-xs text-neutral-500 truncate mt-1 tracking-wide">{mail.sender}</p>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </div>
+          );
+        }
+
+        function ChatView() {
+          return (
+            <div className="h-[calc(100vh-160px)] flex flex-col border border-white/10 rounded-[2rem] overflow-hidden bg-black/40 backdrop-blur-2xl animate-in fade-in duration-700 shadow-2xl">
+              <div className="flex-1 p-6 lg:p-10 overflow-y-auto flex flex-col gap-8">
+                <div className="flex gap-5 max-w-3xl">
+                  <div className="w-16 h-16 rounded-full flex-shrink-0 shadow-[0_0_30px_rgba(255,255,255,0.15)] overflow-hidden border border-white/20">
+                    <img src="./illust_ai_chat.jpg" alt="Pandu AI" className="w-full h-full object-cover mix-blend-screen" />
+                  </div>
+                  <div>
+                    <div className="bg-white/10 p-6 rounded-3xl rounded-tl-sm border border-white/5 text-neutral-200 text-base font-light leading-relaxed backdrop-blur-md">
+                      Greetings. I am Pandu. I have deep integration with your synced Drive and Inbox. <br/><br/>Ask me to extract action items from a specific meeting, draft replies based on recent threads, or analyze your schedule.
+                    </div>
+                  </div>
+                </div>
+              </div>
+              <div className="p-5 bg-black/60 border-t border-white/10 backdrop-blur-xl">
+                <div className="flex items-center gap-4 bg-white/5 border border-white/10 rounded-2xl px-6 py-4 focus-within:border-white/30 transition-colors">
+                  <input type="text" placeholder="Query Pandu Engine..." className="flex-1 bg-transparent border-none outline-none text-base text-white font-light placeholder:text-neutral-600" />
+                  <button className="text-neutral-400 hover:text-white transition-colors"><Send className="w-5 h-5" /></button>
+                </div>
+              </div>
+            </div>
+          );
+        }
+
+        // --- SETTINGS VIEW ---
+        function SettingsView({ settings, onUpdate }) {
+          return (
+            <div className="max-w-2xl space-y-10 animate-in fade-in duration-700">
+              <div>
+                <h2 className="text-3xl font-light text-white mb-3">System Core</h2>
+                <p className="text-neutral-500 text-sm tracking-wide">Configure AI routing, acoustics, and manual overrides.</p>
+              </div>
+
+              <div className="space-y-8">
+                <section className="space-y-5">
+                  <h3 className="text-xs font-bold text-neutral-600 uppercase tracking-widest">Neural Engine</h3>
+                  <div className="bg-white/5 border border-white/5 rounded-3xl p-8 space-y-6 backdrop-blur-md">
+                    <div>
+                      <label className="text-xs font-bold tracking-widest text-neutral-400 block mb-3 uppercase">Primary LLM Node</label>
+                      <select value={settings.aiProvider} onChange={(e) => onUpdate({ ...settings, aiProvider: e.target.value })} className="w-full bg-black border border-white/10 rounded-xl p-4 text-sm text-neutral-200 outline-none focus:border-white/30 transition-colors font-light appearance-none">
+                        <option value="groq">Groq (Llama 3 70B) - Lightning Fast</option>
+                        <option value="gemini">Google Gemini 1.5 - High Context</option>
+                        <option value="claude">Anthropic Claude 3.5</option>
+                      </select>
+                    </div>
+                  </div>
+                </section>
+
+                <section className="space-y-5">
+                  <h3 className="text-xs font-bold text-neutral-600 uppercase tracking-widest">Manual Override (Force Sync)</h3>
+                  <div className="bg-white/5 border border-white/5 rounded-3xl p-8 backdrop-blur-md">
+                    <p className="text-sm font-light text-neutral-300 mb-4">To enable the "Force Sync" button and Morning Auto-Sweeps, you must link your Apps Script Webhook.</p>
+                    <ol className="text-xs text-neutral-500 space-y-2 mb-6 font-light list-decimal list-inside">
+                        <li>In your Apps Script editor, click <strong>Deploy &rarr; New Deployment</strong>.</li>
+                        <li>Select type <strong>Web App</strong>. Set "Who has access" to <strong>Anyone</strong>.</li>
+                        <li>Click Deploy and paste the Web App URL below.</li>
+                    </ol>
+                    <input 
+                        type="url" 
+                        placeholder="https://script.google.com/macros/s/.../exec" 
+                        value={settings.webhookUrl || ''}
+                        onChange={(e) => onUpdate({...settings, webhookUrl: e.target.value})}
+                        className="w-full bg-black border border-white/10 rounded-xl p-4 text-sm text-white outline-none focus:border-indigo-500/50 transition-colors font-light placeholder:text-neutral-700"
+                    />
+                  </div>
+                </section>
+
+                <section className="space-y-5">
+                  <h3 className="text-xs font-bold text-neutral-600 uppercase tracking-widest">Acoustics</h3>
+                  <div className="bg-white/5 border border-white/5 rounded-3xl p-8 backdrop-blur-md flex items-center justify-between">
+                    <div>
+                      <p className="text-base font-light text-white">Completion Audio</p>
+                      <p className="text-xs text-neutral-500 mt-1 tracking-wide">Play a subtle acoustic pop when a task is completed.</p>
+                    </div>
+                    <button onClick={() => onUpdate({...settings, soundEnabled: !settings.soundEnabled})} className={`w-14 h-8 rounded-full relative transition-colors ${settings.soundEnabled ? 'bg-white' : 'bg-neutral-800'}`}>
+                      <span className={`absolute top-1 w-6 h-6 rounded-full transition-all duration-300 ${settings.soundEnabled ? 'bg-black right-1' : 'bg-neutral-500 left-1'}`}></span>
+                    </button>
+                  </div>
+                </section>
+              </div>
+            </div>
+          );
+        }
+
+        function SetupWizard({ onComplete, user }) {
+          const [step, setStep] = useState(1);
+          const [copied, setCopied] = useState(false);
+
+          const scriptCode = `// PANDU CORE CONFIGURATION\nconst CONFIG = {\n  FIREBASE_PROJECT_ID: "${firebaseConfig.projectId}",\n  USER_UID: "${user?.uid || 'PENDING'}",\n  APP_ID: "${appId}",\n  MAX_EMAILS_SWEEP: 5,\n  MAX_FILES_SWEEP: 5\n};\n\n// Paste the rest of Code.gs below.`;
+
+          return (
+            <div className="fixed inset-0 bg-black/90 backdrop-blur-xl z-50 flex items-center justify-center p-4 overflow-y-auto">
+              <div className="w-full max-w-3xl bg-black border border-white/10 rounded-[2.5rem] p-10 lg:p-14 shadow-2xl relative my-8 animate-in zoom-in-95 duration-700 overflow-hidden">
+                <div className="absolute -top-32 -right-32 w-96 h-96 bg-white/5 rounded-full blur-[100px] pointer-events-none"></div>
+
+                {step === 1 && (
+                  <div className="relative z-10 space-y-8 flex flex-col items-center text-center">
+                    <img src="./illust_security.jpg" alt="Pandu Security" className="w-48 h-48 mix-blend-screen drop-shadow-[0_0_30px_rgba(255,255,255,0.15)] mb-2" />
+                    <h2 className="text-4xl font-light text-white tracking-tight">BYOB Architecture</h2>
+                    <p className="text-neutral-400 text-lg font-light leading-relaxed max-w-xl">To ensure zero tracking and absolute data sovereignty, Pandu uses a "Bring Your Own Backend" model. You run a tiny, open-source script within your own Google account.</p>
+                    
+                    <button onClick={() => setStep(2)} className="w-full max-w-md bg-white text-black font-bold text-lg p-5 rounded-2xl hover:bg-neutral-200 transition-colors shadow-[0_0_30px_rgba(255,255,255,0.2)] mt-6 tracking-wide">
+                      Generate Private Backend
+                    </button>
+                  </div>
+                )}
+
+                {step === 2 && (
+                  <div className="relative z-10 space-y-8">
+                    <h2 className="text-3xl font-light text-white">Deploy Background Engine</h2>
+                    
+                    <div className="space-y-6">
+                      <div className="bg-neutral-950 p-6 rounded-3xl border border-white/10">
+                        <div className="flex justify-between items-center mb-4">
+                          <div>
+                            <h3 className="text-sm font-bold tracking-widest text-neutral-300 uppercase">1. Secure Script</h3>
+                          </div>
+                          <button onClick={() => {navigator.clipboard.writeText(scriptCode); setCopied(true); setTimeout(()=>setCopied(false),2000)}} className="px-5 py-2.5 bg-white/10 text-white font-bold rounded-xl transition-all border border-white/20 hover:bg-white/20 text-xs tracking-wider flex items-center gap-2">
+                            {copied ? <><Check className="w-4 h-4" /> SECURED</> : "COPY CODE"}
+                          </button>
+                        </div>
+                        <pre className="bg-black border border-white/5 rounded-2xl p-5 text-sm text-neutral-400 overflow-x-auto font-mono max-h-40 selection:bg-white/20 leading-relaxed">
+                          {scriptCode}
+                        </pre>
+                      </div>
+
+                      <div className="bg-neutral-950 p-6 rounded-3xl border border-white/10">
+                        <h3 className="text-sm font-bold tracking-widest text-neutral-300 uppercase mb-6">2. Deploy (3 Minutes)</h3>
+                        <ul className="space-y-6 text-base font-light text-neutral-400">
+                          <li className="flex gap-4">
+                            <span className="w-6 h-6 rounded-full bg-white/10 text-white flex items-center justify-center text-xs flex-shrink-0 font-bold border border-white/20">A</span>
+                            <p>Open <a href="https://script.google.com" target="_blank" rel="noreferrer" className="text-white hover:underline font-medium">script.google.com</a> and click <strong>New Project</strong>.</p>
+                          </li>
+                          <li className="flex gap-4">
+                            <span className="w-6 h-6 rounded-full bg-white/10 text-white flex items-center justify-center text-xs flex-shrink-0 font-bold border border-white/20">B</span>
+                            <p>Erase default code, paste your Secure Script, and click <strong>▷ Run</strong>.</p>
+                          </li>
+                          <li className="flex gap-4">
+                            <span className="w-6 h-6 rounded-full bg-white text-black flex items-center justify-center text-xs flex-shrink-0 font-bold">C</span>
+                            <div className="iridescent-border p-5 rounded-2xl w-full bg-black/50">
+                              <p className="text-white font-bold mb-2 flex items-center gap-2 text-sm tracking-wide">
+                                <ShieldCheck className="w-4 h-4" /> THE SECURITY BYPASS
+                              </p>
+                              <p className="text-sm text-neutral-300 font-light leading-relaxed">
+                                Google will warn that "Google hasn't verified this app." This happens precisely because <strong>you</strong> are the developer, protecting your own privacy. <br/><br/>
+                                Click <strong>Review Permissions</strong> &rarr; Choose your account &rarr; Click <strong>Advanced</strong> &rarr; Click <strong>Go to Untitled project</strong> &rarr; Click <strong>Allow</strong>.
+                              </p>
+                            </div>
+                          </li>
+                        </ul>
+                      </div>
+                    </div>
+
+                    <div className="flex gap-4 pt-6">
+                       <button onClick={() => setStep(1)} className="px-8 py-4 text-neutral-400 hover:text-white transition-colors text-sm font-bold tracking-widest uppercase">Back</button>
+                       <button onClick={() => onComplete({ wizardCompleted: true })} className="flex-1 bg-white text-black font-bold text-sm tracking-widest uppercase p-4 rounded-2xl hover:bg-neutral-200 transition-colors shadow-[0_0_30px_rgba(255,255,255,0.2)]">
+                         Enter Enclave
+                       </button>
+                    </div>
+                  </div>
+                )}
+              </div>
+            </div>
+          );
+        }
+
+        const root = createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
+</body>
+</html>
