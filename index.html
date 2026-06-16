@@ -113,10 +113,15 @@
           Activity, ShieldCheck, Send, Check, X, AlertTriangle, Loader2, LogOut, Sun
         } from 'lucide-react';
 
-        // --- FIREBASE CONFIGURATION (REPLACE THESE KEYS LATER) ---
-        const firebaseConfig = {
-          apiKey: "demo-key", authDomain: "demo.firebaseapp.com", projectId: "demo-project", storageBucket: "demo.appspot.com"
-        };
+          const firebaseConfig = {
+    apiKey: "AIzaSyAaUhv5MbxtPlGj-h5qOl5UnB0UUAaTOBE",
+    authDomain: "pandu-tasks.firebaseapp.com",
+    projectId: "pandu-tasks",
+    storageBucket: "pandu-tasks.firebasestorage.app",
+    messagingSenderId: "157159875958",
+    appId: "1:157159875958:web:b4acf1fbd71c976f9d0657",
+    measurementId: "G-85NLZDP50J"
+  };
         const app = initializeApp(firebaseConfig);
         const auth = getAuth(app);
         const db = getFirestore(app);
